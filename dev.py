@@ -89,9 +89,11 @@ class MultipleHeadAttention(nn.Module):
     def __init__(self, num_heads, head_size):
         super().__init__()
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
-    
+        self.proj = nn.Linear(n_embd, n_embd)
     def forward(self, x):
-        return torch.cat([h(x) for h in self.heads], dim=-1) # concate over the channel
+        out = torch.cat([h(x) for h in self.heads], dim=-1) # concate over the channel
+        out = self.proj(out)
+        return out
 
 
 class MLP(nn.Module):
@@ -99,12 +101,26 @@ class MLP(nn.Module):
     def __init__(self, n_embd):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(n_embd, n_embd),
+            nn.Linear(n_embd, 4*n_embd),
             nn.ReLU(),
+            nn.Linear(4*n_embd, n_embd)
         )
 
     def forward(self, x):
         return self.net(x)
+
+
+class Block(nn.Module):
+    def __init__(self, n_embd, n_head):
+        super().__init__()
+        head_size = n_embd // n_head
+        self.sa = MultipleHeadAttention(n_head, head_size)
+        self.mlp = MLP(n_embd)
+    
+    def forward(self, x):
+        x = x + self.sa(x)
+        x = x + self.mlp(x)
+        return x
 
 
 class Bigram(nn.Module):
@@ -112,8 +128,13 @@ class Bigram(nn.Module):
         super().__init__()
         self.token_embedding_table = nn.Embedding(num_embeddings=vocab_size, embedding_dim=n_embd)
         self.pos_embedding_table = nn.Embedding(num_embeddings=block_size, embedding_dim=n_embd)
-        self.sa_head = MultipleHeadAttention(4, n_embd//4)
-        self.mlp = MLP(n_embd)
+        # self.sa_head = MultipleHeadAttention(4, n_embd//4)
+        # self.mlp = MLP(n_embd)
+        self.blocks = nn.Sequential(
+            Block(n_embd, n_head=4),
+            Block(n_embd, n_head=4),
+            Block(n_embd, n_head=4),
+        )
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
     def forward(self, idx, targets=None):
@@ -129,8 +150,9 @@ class Bigram(nn.Module):
         token_embd = self.token_embedding_table(idx) # (B,T,C)
         pos_embd = self.pos_embedding_table(torch.arange(T, device=device)) # (T,C)
         x = token_embd + pos_embd # (B,T,C)
-        x = self.sa_head(x)
-        x = self.mlp(x)
+        # x = self.sa_head(x)
+        # x = self.mlp(x)
+        x = self.blocks(x)
         logits = self.lm_head(x) # (B,T,vocab_size)
 
         if targets is None:
