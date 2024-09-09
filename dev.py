@@ -8,12 +8,13 @@ torch.manual_seed(1336)
 # hyperparameters
 batch_size = 4 # number of independent sequences we process in parallel
 block_size = 8 # maximum context length for predictions
-max_iters = 10000
+max_iters = 5000
 learning_rate = 1e-3
 eval_iterval = 300
 eval_iters = 200
 n_embd = 32
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
 
 with open('input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
@@ -63,12 +64,42 @@ def estimate_loss():
     return out
 
 
+class Head(nn.Module):
+    """single-head of self-attention"""
+    def __init__(self, head_size):
+        super().__init__()
+        self.key = nn.Linear(n_embd, head_size, bias=False)
+        self.query = nn.Linear(n_embd, head_size, bias=False)
+        self.value = nn.Linear(n_embd, head_size, bias=False)
+        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
+    
+    def forward(self, x):
+        B, T, C = x.shape
+        k = self.key(x) # B,T,head_size
+        q = self.query(x) # B,T,head_size
+        wei = q @ k.transpose(-2, -1) * C**0.5 # (B,T,head_size @ B,head_size,T) --> (B,T,T)
+        wei = wei.masked_fill(self.tril[:T, :T]==0, float('-inf'))
+        wei = F.softmax(wei, dim=-1)
+        v = self.value(x)
+        out = wei @ v
+        return out
+
+
+class MultipleHeadAttention(nn.Module):
+    def __init__(self, num_heads, head_size):
+        super().__init__()
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+    
+    def forward(self, x):
+        return torch.cat([h(x) for h in self.heads], dim=-1) # concate over the channel dimension
+
 class Bigram(nn.Module):
     
     def __init__(self):
         super().__init__()
         self.token_embedding_table = nn.Embedding(num_embeddings=vocab_size, embedding_dim=n_embd)
         self.pos_embedding_table = nn.Embedding(num_embeddings=block_size, embedding_dim=n_embd)
+        self.sa_head = Head(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
     def forward(self, idx, targets=None):
@@ -80,10 +111,11 @@ class Bigram(nn.Module):
             The target should be of shape [N], where each value is the target class for the corresponding sample.
         O/P logits [B*T, C] OR [B,T,C], loss
         """
-        B,T = idx.shape
+        B, T = idx.shape
         token_embd = self.token_embedding_table(idx) # (B,T,C)
         pos_embd = self.pos_embedding_table(torch.arange(T, device=device)) # (T,C)
-        x = pos_embd + token_embd # (B,T,C)
+        x = token_embd + pos_embd # (B,T,C)
+        x = self.sa_head(x)
         logits = self.lm_head(x) # (B,T,vocab_size)
 
         if targets is None:
@@ -100,12 +132,14 @@ class Bigram(nn.Module):
         new tokens are added in the Time dimension for each example in the Batch
         """
         for _ in range(max_new_tokens):
-            logits, loss = self(idx)
+            idx_crop = idx[:, -block_size:]
+            logits, loss = self(idx_crop)
             logits = logits[:, -1, :] # plucking out the logits of the last element in T having dim (B, C)
             probs = F.softmax(logits, dim=-1) # dim (B, C)
             idx_next = torch.multinomial(probs, num_samples=1) # dim (B, 1)
             idx = torch.cat((idx, idx_next), dim=1) # dim (B, T+1)
         return idx
+
 
 model = Bigram()
 model.to(device)
