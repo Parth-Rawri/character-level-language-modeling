@@ -68,6 +68,7 @@ class Bigram(nn.Module):
     def __init__(self):
         super().__init__()
         self.token_embedding_table = nn.Embedding(num_embeddings=vocab_size, embedding_dim=n_embd)
+        self.pos_embedding_table = nn.Embedding(num_embeddings=block_size, embedding_dim=n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
     def forward(self, idx, targets=None):
@@ -79,8 +80,11 @@ class Bigram(nn.Module):
             The target should be of shape [N], where each value is the target class for the corresponding sample.
         O/P logits [B*T, C] OR [B,T,C], loss
         """
-        token_embd = self.token_embedding_table(idx) # (B,T,embedding_dim)
-        logits = self.lm_head(token_embd) # (B,T,vocab_size)
+        B,T = idx.shape
+        token_embd = self.token_embedding_table(idx) # (B,T,C)
+        pos_embd = self.pos_embedding_table(torch.arange(T, device=device)) # (T,C)
+        x = pos_embd + token_embd # (B,T,C)
+        logits = self.lm_head(x) # (B,T,vocab_size)
 
         if targets is None:
             loss = None
