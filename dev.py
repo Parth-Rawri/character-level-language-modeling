@@ -3,13 +3,17 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-torch.manual_seed(1337)
+torch.manual_seed(1336)
 
 # hyperparameters
 batch_size = 4 # number of independent sequences we process in parallel
 block_size = 8 # maximum context length for predictions
 max_iters = 10000
 learning_rate = 1e-3
+eval_iterval = 300
+eval_iters = 200
+n_embd = 32
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 with open('input.txt', 'r', encoding='utf-8') as f:
     text = f.read()
@@ -34,19 +38,37 @@ n = int(0.9*len(data))
 train_data = data[:n]
 val_data = data[n:]
 
-# generating a batch of data
+# generating a random batch of data
 def get_batch(split):
     data = train_data if split=='train' else val_data
-    ix = torch.randint(len(train_data)-block_size, (batch_size, ))
-    x = torch.stack([data[x:x+block_size] for x in ix])
-    y = torch.stack([data[x+1:x+block_size+1] for x in ix])
-    return x, y
+    ix = torch.randint(len(data)-block_size, (batch_size, ))
+    xb = torch.stack([data[x:x+block_size] for x in ix])
+    yb = torch.stack([data[x+1:x+block_size+1] for x in ix])
+    xb, yb = xb.to(device), yb.to(device)
+    return xb, yb
+
+# estimate a less noisy version of loss
+@torch.no_grad()
+def estimate_loss():
+    out = {}
+    model.eval()
+    for split in ['train', 'eval']:
+        losses = torch.zeros(eval_iters)
+        for iter in range(eval_iters):
+            xb, yb = get_batch(split)
+            logits, loss = model(xb, yb)
+            losses[iter] = loss.item()
+        out[split] = losses.mean()
+    model.train()
+    return out
+
 
 class Bigram(nn.Module):
     
-    def __init__(self, vocab_size):
+    def __init__(self):
         super().__init__()
-        self.token_embedding_table = nn.Embedding(num_embeddings=vocab_size, embedding_dim=vocab_size)
+        self.token_embedding_table = nn.Embedding(num_embeddings=vocab_size, embedding_dim=n_embd)
+        self.lm_head = nn.Linear(n_embd, vocab_size)
 
     def forward(self, idx, targets=None):
         """
@@ -57,7 +79,8 @@ class Bigram(nn.Module):
             The target should be of shape [N], where each value is the target class for the corresponding sample.
         O/P logits [B*T, C] OR [B,T,C], loss
         """
-        logits = self.token_embedding_table(idx)
+        token_embd = self.token_embedding_table(idx) # (B,T,embedding_dim)
+        logits = self.lm_head(token_embd) # (B,T,vocab_size)
 
         if targets is None:
             loss = None
@@ -80,10 +103,15 @@ class Bigram(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1) # dim (B, T+1)
         return idx
 
-model = Bigram(vocab_size)
+model = Bigram()
+model.to(device)
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
 for iter in range(max_iters):
+    if iter % eval_iterval == 0:
+        losses = estimate_loss()
+        print(f'step {iter}, train loss {losses['train']:.4f}, eval loss {losses['eval']:.4f}')
+
     # sample a batch of data
     xb, yb = get_batch('train')
     logits, loss = model(xb, yb)
@@ -91,9 +119,6 @@ for iter in range(max_iters):
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
-    print(loss)
 
-print(decode(model.generate(torch.zeros((1,1), dtype=torch.long), max_new_tokens=300)[0].tolist()))
-
-context = torch.zeros((1,1), dtype=torch.long)
+context = torch.zeros((1,1), dtype=torch.long, device=device)
 print(decode(model.generate(context, max_new_tokens=300)[0].tolist()))
