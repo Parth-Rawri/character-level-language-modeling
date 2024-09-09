@@ -159,13 +159,13 @@ class Bigram(nn.Module):
         # self.sa_head = MultipleHeadAttention(4, n_embd//4)
         # self.mlp = MLP(n_embd)
         # self.blocks = nn.Sequential(
-        #     Block(n_embd, n_head),
-        #     Block(n_embd, n_head),
-        #     Block(n_embd, n_head),
+        #     Block(n_embd, n_head=4),
+        #     Block(n_embd, n_head=4),
+        #     Block(n_embd, n_head=4),
         #     nn.LayerNorm(n_embd)
         # )
-        self.ln_final = nn.LayerNorm(n_embd)
         self.blocks = nn.Sequential(*[Block(n_embd, n_head=n_head) for _ in range(num_layer)])
+        self.ln_final = nn.LayerNorm(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
     def forward(self, idx, targets=None):
@@ -197,7 +197,7 @@ class Bigram(nn.Module):
 
     def generate(self, idx, max_new_tokens):
         """
-        I/P idx dim [B,T], O/P idx dim [B, T+max_new_tokens]
+        I/P idx dim [B,sequence_length which is T], O/P idx dim [B, T+max_new_tokens]
         new tokens are added in the Time dimension for each example in the Batch
         """
         for _ in range(max_new_tokens):
